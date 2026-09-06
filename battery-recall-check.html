@@ -1,0 +1,356 @@
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>バッテリーリコール判定</title>
+<style>
+  :root{
+    --ink:#1C2530; --sub:#5A6672; --paper:#E9ECEF; --card:#FFFFFF; --line:#C3CAD2;
+    --hit:#C1121F; --clear:#12674A; --warn:#B26A00;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:"Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",sans-serif;
+    font-size:16px;line-height:1.6;min-height:100dvh;display:flex;flex-direction:column}
+  .wrap{flex:1;display:flex;flex-direction:column;padding:14px;max-width:520px;margin:0 auto;width:100%}
+  .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;font-size:13px;color:var(--sub)}
+  .bar button{border:0;background:none;font:inherit;font-size:13px;color:var(--sub);text-decoration:underline;cursor:pointer;padding:4px}
+
+  .shutter{width:100%;flex:1;min-height:210px;border:3px solid var(--ink);border-radius:8px;background:var(--card);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;font:inherit;color:var(--ink);cursor:pointer;padding:16px}
+  .shutter:active{background:var(--ink);color:#fff}
+  .shutter:active svg{stroke:#fff}
+  .shutter:active small{color:#C3CAD2}
+  .shutter b{font-size:24px;font-weight:800;letter-spacing:.03em}
+  .shutter small{font-size:13px;color:var(--sub);text-align:center;line-height:1.5}
+  .shutter:focus-visible{outline:4px solid var(--warn);outline-offset:3px}
+
+  .verdict{border-radius:8px;padding:20px 16px;color:#fff;margin-bottom:14px}
+  .verdict.hit{background:var(--hit)} .verdict.clear{background:var(--clear)} .verdict.warn{background:var(--warn)}
+  .verdict h1{margin:0;font-size:31px;line-height:1.25;font-weight:800}
+  .verdict p{margin:8px 0 0;font-size:14px;opacity:.95}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:12px}
+  .card h2{margin:0;padding:10px 13px;font-size:12px;font-weight:700;color:var(--sub);border-bottom:1px solid var(--line)}
+  .field{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:13px;
+    border:0;border-top:1px solid #EDF0F3;background:var(--card);font:inherit;text-align:left;cursor:pointer}
+  .field:first-of-type{border-top:0}
+  .field:active{background:#F2F5F8}
+  .k{font-size:12px;color:var(--sub);flex:none}
+  .v{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:19px;font-weight:600;letter-spacing:.06em;word-break:break-all;text-align:right}
+  .v.empty{color:var(--warn);font-family:inherit;font-size:14px;letter-spacing:0}
+  .meta{font-size:12px;color:var(--sub);padding:10px 13px;border-top:1px solid #EDF0F3;background:#F7F9FA;line-height:1.55;margin:0}
+
+  a.contact{display:block;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:13px;text-decoration:none;color:var(--ink);margin-bottom:12px}
+  a.contact .m{font-size:12px;color:var(--sub);line-height:1.5}
+  a.contact .t{font-size:24px;font-weight:700;letter-spacing:.04em;margin-top:3px}
+  a.contact .s{font-size:12px;margin-top:5px;color:#0B5FA5;text-decoration:underline;word-break:break-all}
+
+  .btn{width:100%;padding:15px;border:2px solid var(--ink);border-radius:8px;background:transparent;
+    font:inherit;font-size:16px;font-weight:700;color:var(--ink);cursor:pointer;margin-top:auto}
+  .btn:active{background:var(--ink);color:#fff}
+  .btn.solid{background:var(--ink);color:#fff}
+  .btn.solid:active{opacity:.75}
+
+  .busy{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:var(--sub)}
+  .spin{width:36px;height:36px;border:4px solid var(--line);border-top-color:var(--ink);border-radius:50%;animation:r .8s linear infinite}
+  @keyframes r{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){.spin{animation-duration:2.4s}}
+  .err{background:var(--card);border:1px solid var(--hit);border-left:5px solid var(--hit);border-radius:6px;padding:12px;font-size:14px;margin-bottom:12px}
+  .hrow{display:flex;justify-content:space-between;gap:10px;padding:11px 13px;border-top:1px solid #EDF0F3;font-size:14px}
+  .hrow:first-of-type{border-top:0}
+  .hrow .d{font-size:12px;color:var(--sub)}
+  .tag{font-size:12px;font-weight:700;padding:2px 8px;border-radius:4px;white-space:nowrap;align-self:center}
+  .tag.hit{background:#FBE9EA;color:var(--hit)} .tag.clear{background:#E7F2ED;color:var(--clear)} .tag.warn{background:#FDF1DD;color:var(--warn)}
+  .foot{font-size:11px;color:var(--sub);text-align:center;padding:12px 10px 20px;line-height:1.6}
+  input[type=file]{display:none}
+</style>
+
+<div class="wrap" id="app"></div>
+<p class="foot">店頭での一次確認用です。最終的な可否は必ずメーカー公式の窓口・確認ページでご確認ください。</p>
+
+<script>
+/* ===== マスタの取得元（スプレッドシートの公開CSV） ===== */
+const CSV = {
+  cases:  "https://docs.google.com/spreadsheets/d/e/2PACX-1vTEzT_wEJd_hmyM42ZPAUwGjJS5yZBpJu3_gq2JptX6rHokTKX83juYBZHPPNcMdQ/pub?gid=2009811419&single=true&output=csv",
+  models: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTEzT_wEJd_hmyM42ZPAUwGjJS5yZBpJu3_gq2JptX6rHokTKX83juYBZHPPNcMdQ/pub?gid=1147726812&single=true&output=csv",
+  lots:   "https://docs.google.com/spreadsheets/d/e/2PACX-1vTEzT_wEJd_hmyM42ZPAUwGjJS5yZBpJu3_gq2JptX6rHokTKX83juYBZHPPNcMdQ/pub?gid=1316981725&single=true&output=csv"
+};
+
+/* ===== 内蔵の予備データ（通信できないときはこれで動く／2026-09-07時点） ===== */
+const FB_CASES = [
+  ["YMH-X0T-X0U","2016年8月〜2018年12月製造 PASバッテリー（X0T型/X0U型）無償交換","ヤマハ発動機 / 豊田TRIKE","0120-772-780","https://www.yamaha-motor.co.jp/recall/pas/2022-04-05/","登録済"],
+  ["BS-C301-C400","電動アシスト自転車用バッテリー（C301/C400）無償交換","ブリヂストンサイクル / あさひ","0120-220-566","https://www.bscycle.co.jp/info/2022/10537/","ロット未登録"],
+  ["YMH-X83","X83型リチウムイオンバッテリー 無償交換","ヤマハ発動機 / ブリヂストンサイクル / 丸石サイクル","0120-772-780","https://www.yamaha-motor.co.jp/recall/pas/","型番・ロット未登録"],
+  ["PCT-2015-2017","2015年1月〜2017年7月製造分 バッテリー無償交換","パナソニック サイクルテック","0120-870-355","https://panasonic.co.jp/pct/","型番・ロット未登録"]
+];
+const FB_MODELS = [
+  ["YMH-X0T-X0U","X0T-00","YAMAHA PAS（X0T型）"],["YMH-X0T-X0U","X0T-20","YAMAHA PAS（X0T型）"],
+  ["YMH-X0T-X0U","X0U-00","YAMAHA PAS（X0U型）"],["YMH-X0T-X0U","X0U-20","YAMAHA PAS（X0U型）"],
+  ["BS-C301-C400","X0T-10","BRIDGESTONE C301型"],["BS-C301-C400","X0T-30","BRIDGESTONE C301型"],
+  ["BS-C301-C400","X0U-30","BRIDGESTONE C400型"]
+];
+const FB_LOTS = "UH09 UH11 UH12 UH16 UH17 UH19 UH22 UH23 UH24 UH26 UI06 UI14 UI16 UI17 UI19 UI23 UI24 UI30 UJ06 UJ11 UJ13 UJ14 UJ17 UJ18 UJ25 UJ26 UK01 UK02 UK04 UK06 UK07 UK10 UK18 UK19 UK21 UK22 UK23 UK24 UK28 UK30 UL01 UL02 UL03 UL05 UL06 UL07 UL08 UL14 UL16 UL17 UL19 UL20 UL21 UL22 UL24 UL26 UL27 UL28 UL29 VA03 VA04 VA05 VA09 VA11 VA12 VA14 VA16 VA18 VA22 VA24 VB03 VB04 VB07 VB08 VB09 VB10 VB11 VB12 VB13 VB14 VB15 VB16 VB17 VB18 VB19 VB20 VB21 VB22 VB23 VB24 VB25 VB26 VB27 VC01 VC02 VC03 VC04 VC08 VC09 VC10 VC14 VC15 VC16 VC17 VC20 VC21 VC23 VC24 VC25 VC30 VD01 VD05 VD08 VD10 VD17 VD18 VD21 VD24 VD28 VE02 VE03 VE13 VE15 VE19 VE22 VE23 VE25 VE26 VE27 VE31 VF01 VF05 VF06 VF07 VF08 VF09 VF10 VF17 VF19 VF20 VF21 VF22 VF24 VG03 VG04 VG06 VG07 VG08 VG10 VG11 VG12 VG13 VG14 VG17 VG18 VG21 VG24 VG27 VH01 VH07 VH08 VH10 VH11 VH12 VH15 VH18 VH19 VH24 VH28 VH30 VI04 VI05 VI07 VI08 VI09 VI11 VI13 VI15 VI18 VI19 VI20 VI21 VI22 VI23 VI25 VI26 VI27 VI28 VJ02 VJ05 VJ07 VJ12 VJ13 VJ14 VJ16 VJ17 VJ18 VJ20 VJ23 VJ24 VJ25 VJ30 VJ31 VK06 VK07 VK14 VK17 VK20 VK22 VK23 VK24 VK27 VK28 VK29 VK30 VL01 VL05 VL06 VL07 VL15 VL18 VL19 VL21 VL22 VL28 WC05 WC06 WF01 WL29 YUI1 YVA0 YVB1 YVB2 YVC0 YVC1 YVC3 YVD0 YVD1 YVD2 YVE0 YVE1 YVE2 YVF0 YVF2 YVG1 YVI1 YVI3 YVJ0 YVJ2 YVL2";
+
+/* ===== 保存（アプリ内ストレージ → localStorage → メモリ） ===== */
+const mem = {};
+const store = {
+  async get(k){
+    try{ if(window.storage){ const r = await window.storage.get(k); return r ? r.value : null; } }catch(e){}
+    try{ const v = localStorage.getItem(k); if(v!==null) return v; }catch(e){}
+    return (k in mem) ? mem[k] : null;
+  },
+  async set(k,v){
+    mem[k]=v;
+    try{ if(window.storage){ await window.storage.set(k,v); return; } }catch(e){}
+    try{ localStorage.setItem(k,v); }catch(e){}
+  }
+};
+
+/* ===== ユーティリティ ===== */
+function N(s){
+  return (s||"").toString().toUpperCase()
+    .replace(/[\uFF21-\uFF3A\uFF41-\uFF5A\uFF10-\uFF19]/g, c => String.fromCharCode(c.charCodeAt(0)-0xFEE0))
+    .toUpperCase().replace(/[^A-Z0-9]/g,"");
+}
+function esc(s){
+  return (s||"").toString().replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+}
+function parseCSV(text){
+  const rows=[]; let row=[], cur="", q=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(q){ if(c==='"'){ if(text[i+1]==='"'){cur+='"';i++;} else q=false; } else cur+=c; }
+    else if(c==='"') q=true;
+    else if(c===","){ row.push(cur); cur=""; }
+    else if(c==="\n"){ row.push(cur); rows.push(row); row=[]; cur=""; }
+    else if(c!=="\r") cur+=c;
+  }
+  row.push(cur); rows.push(row);
+  const head=(rows.shift()||[]).map(h=>h.trim());
+  return rows.filter(r=>r.some(v=>(v||"").trim()!=="")).map(r=>{
+    const o={}; head.forEach((h,i)=>o[h]=(r[i]||"").trim()); return o;
+  });
+}
+
+/* ===== 状態 ===== */
+const app = document.getElementById("app");
+let M = null, source = "";
+let cur = { type:"", lot:"", hit:null };
+
+/* ===== マスタ ===== */
+function build(cases, models, lots){
+  const byId = {};
+  cases.forEach(c=>{
+    const id=c["案件ID"]; if(!id) return;
+    byId[id] = { id, name:c["案件名"]||"", maker:c["メーカー・ブランド"]||"",
+      tel:c["問合せ電話"]||"", url:c["確認URL"]||"", state:c["状態"]||"", lots:new Set(), models:[] };
+  });
+  models.forEach(m=>{ const c=byId[m["案件ID"]];
+    if(c && m["型番"]) c.models.push({raw:m["型番"], key:N(m["型番"]), label:m["製品上の名称"]||""}); });
+  lots.forEach(l=>{ const c=byId[l["案件ID"]]; if(c && l["ロット"]) c.lots.add(N(l["ロット"]).slice(0,4)); });
+  return { cases:Object.values(byId) };
+}
+function fallback(){
+  return build(
+    FB_CASES.map(r=>({"案件ID":r[0],"案件名":r[1],"メーカー・ブランド":r[2],"問合せ電話":r[3],"確認URL":r[4],"状態":r[5]})),
+    FB_MODELS.map(r=>({"案件ID":r[0],"型番":r[1],"製品上の名称":r[2]})),
+    FB_LOTS.split(" ").map(x=>({"案件ID":"YMH-X0T-X0U","ロット":x}))
+  );
+}
+async function loadMaster(){
+  try{
+    const [c,m,l] = await Promise.all([CSV.cases,CSV.models,CSV.lots].map(u =>
+      fetch(u).then(r=>{ if(!r.ok) throw new Error(r.status); return r.text(); })));
+    const built = build(parseCSV(c), parseCSV(m), parseCSV(l));
+    if(!built.cases.length) throw new Error("empty");
+    await store.set("master", JSON.stringify({at:Date.now(), c, m, l}));
+    source = "シートから取得";
+    return built;
+  }catch(e){
+    const cached = await store.get("master");
+    if(cached){
+      try{
+        const o = JSON.parse(cached);
+        source = "保存済み（" + new Date(o.at).toLocaleDateString("ja-JP") + "取得）";
+        return build(parseCSV(o.c), parseCSV(o.m), parseCSV(o.l));
+      }catch(e2){}
+    }
+    source = "内蔵の予備データ";
+    return fallback();
+  }
+}
+
+/* ===== 判定 ===== */
+function findModel(typeStr){
+  const t = N(typeStr);
+  if(!t) return null;
+  let best = null;
+  for(const c of M.cases) for(const m of c.models)
+    if(m.key && t.indexOf(m.key) !== -1)
+      if(!best || m.key.length > best.m.key.length) best = { c, m };
+  return best;
+}
+function judgeLot(hit, lotStr){
+  const l = N(lotStr).slice(0,4);
+  if(l.length < 4) return {v:"warn", h:"要確認", p:"ロットを4桁読み取れませんでした。手入力するか、公式ページで照合してください。"};
+  return hit.c.lots.has(l)
+    ? {v:"hit", h:"リコール対象です", p:"直ちに使用を中止し、下記の窓口へご案内ください。"}
+    : {v:"clear", h:"対象外です", p:"この案件の対象ロットには該当しませんでした。"};
+}
+
+/* ===== 画面 ===== */
+function shell(inner){
+  app.innerHTML = `<div class="bar"><span>バッテリーリコール判定</span><button id="hist">履歴</button></div>` + inner;
+  const h = document.getElementById("hist"); if(h) h.onclick = historyScreen;
+}
+function busy(t){ shell(`<div class="busy"><div class="spin"></div><p>${esc(t)}</p></div>`); }
+function camSvg(size){
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="#1C2530" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 8a2 2 0 0 1 2-2h2.5l1.2-2h6.6l1.2 2H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.8"/></svg>`;
+}
+function bindShot(btnId, inputId, kind){
+  const f = document.getElementById(inputId), b = document.getElementById(btnId);
+  b.onclick = () => f.click();
+  f.onchange = () => { if(f.files[0]) read(f.files[0], kind); };
+}
+
+function homeScreen(msg){
+  shell(`${msg?`<div class="err">${esc(msg)}</div>`:""}
+    <button class="shutter" id="go">${camSvg(50)}
+      <b>型番を撮る</b><small>残量表示ボタンを正面にして<br>右側面のラベル</small></button>
+    <p class="foot" style="padding:12px 0 0">マスタ: ${esc(source)}</p>
+    <input type="file" id="f" accept="image/*" capture="environment">`);
+  bindShot("go","f","type");
+}
+
+function typeScreen(){
+  const hit = cur.hit;
+  let v,h,p,next=false;
+  if(!cur.type){ v="warn"; h="読み取れません"; p="型番をタップして手入力してください。"; }
+  else if(!hit){ v="clear"; h="対象外です"; p="登録中のどのリコールにも該当しません。"; }
+  else if(hit.c.state.indexOf("未登録")!==-1){ v="warn"; h="要確認"; p="対象リコールの型番ですが、ロット一覧が未登録のため判定できません。窓口でご確認ください。"; }
+  else { v="warn"; h="対象型番です"; p="続けてロット面を撮ってください。"; next=true; }
+
+  shell(`<div class="verdict ${v}"><h1>${h}</h1><p>${p}</p></div>
+    <div class="card"><h2>読み取った内容　違っていればタップして直す</h2>
+      <button class="field" data-k="type"><span class="k">型番</span>
+        <span class="v ${cur.type?"":"empty"}">${esc(cur.type)||"読み取れませんでした"}</span></button>
+      ${hit?`<p class="meta">${esc(hit.m.label)}<br>${esc(hit.c.name)}</p>`:""}
+    </div>
+    ${hit?contact(hit.c):""}
+    ${next?`<button class="shutter" id="go2" style="min-height:150px">${camSvg(40)}
+        <b>ロット面を撮る</b><small>反対側の下部にあるラベル</small></button>
+      <input type="file" id="f2" accept="image/*" capture="environment">
+      <button class="btn" id="again" style="margin-top:12px">最初に戻る</button>`
+     :`<button class="btn solid" id="again">次のバッテリーを撮る</button>`}`);
+
+  wireFields(()=>{ cur.hit = findModel(cur.type); typeScreen(); });
+  if(next) bindShot("go2","f2","lot");
+  document.getElementById("again").onclick = reset;
+  if(!next) save(h);
+}
+
+function lotScreen(){
+  const r = judgeLot(cur.hit, cur.lot);
+  shell(`<div class="verdict ${r.v}"><h1>${r.h}</h1><p>${r.p}</p></div>
+    <div class="card"><h2>読み取った内容　違っていればタップして直す</h2>
+      <button class="field" data-k="type"><span class="k">型番</span><span class="v">${esc(cur.type)}</span></button>
+      <button class="field" data-k="lot"><span class="k">ロット</span>
+        <span class="v ${cur.lot?"":"empty"}">${esc(cur.lot)||"読み取れませんでした"}</span></button>
+      <p class="meta">ロットは左から4桁で判定しています。<br>${esc(cur.hit.c.name)}</p>
+    </div>
+    ${contact(cur.hit.c)}
+    <button class="btn solid" id="again">次のバッテリーを撮る</button>`);
+  wireFields(lotScreen);
+  document.getElementById("again").onclick = reset;
+  save(r.h);
+}
+
+function contact(c){
+  return `<a class="contact" href="tel:${esc((c.tel||"").replace(/-/g,""))}">
+    <div class="m">${esc(c.maker)}</div><div class="t">${esc(c.tel)}</div>
+    <div class="s">${esc(c.url)}</div></a>`;
+}
+function wireFields(after){
+  Array.prototype.forEach.call(app.querySelectorAll(".field"), b => b.onclick = () => {
+    const k = b.dataset.k;
+    const val = prompt(k==="type"?"型番を入力":"ロットを入力（左から4桁）", cur[k]||"");
+    if(val===null) return;
+    cur[k] = (k==="type") ? val.trim().toUpperCase() : N(val).slice(0,4);
+    after();
+  });
+}
+function reset(){ cur = {type:"",lot:"",hit:null}; homeScreen(); }
+
+/* ===== 履歴（この端末にのみ保存） ===== */
+async function save(result){
+  const raw = await store.get("history");
+  let list = [];
+  try{ list = raw ? JSON.parse(raw) : []; }catch(e){ list = []; }
+  const v = result==="リコール対象です" ? "hit" : (result==="対象外です" ? "clear" : "warn");
+  list.unshift({t:Date.now(), type:cur.type, lot:cur.lot, r:result, v});
+  await store.set("history", JSON.stringify(list.slice(0,200)));
+}
+async function historyScreen(){
+  const raw = await store.get("history");
+  let list = [];
+  try{ list = raw ? JSON.parse(raw) : []; }catch(e){ list = []; }
+  shell(`<div class="card"><h2>判定履歴　この端末にのみ保存されます</h2>
+      ${list.length ? list.map(h=>`<div class="hrow">
+        <div><div class="v" style="text-align:left;font-size:16px">${esc(h.type)||"—"}${h.lot?" / "+esc(h.lot):""}</div>
+          <div class="d">${new Date(h.t).toLocaleString("ja-JP",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"})}</div></div>
+        <span class="tag ${esc(h.v)}">${esc(h.r)}</span></div>`).join("")
+       : `<p class="meta">まだ履歴はありません。</p>`}</div>
+    ${list.length?`<button class="btn" id="clr" style="margin-top:0;margin-bottom:12px">履歴を消す</button>`:""}
+    <button class="btn solid" id="back">戻る</button>`);
+  document.getElementById("back").onclick = reset;
+  const c = document.getElementById("clr");
+  if(c) c.onclick = async () => { if(confirm("履歴をすべて消しますか？")){ await store.set("history","[]"); historyScreen(); } };
+}
+
+/* ===== 撮影 → 読み取り ===== */
+const PROMPTS = {
+  type: '電動アシスト自転車バッテリーのラベル画像です。ラベルに印字されている「バッテリー型番」を読み取ってください。型番はカッコ内に印字されている場合があり、X0T-00、X0U-20、X83のような英数字とハイフンの組み合わせです。品番・規格・容量（Ah）・電圧・製造番号と混同しないこと。読み取れない場合は空文字にし、推測で埋めないこと。JSONのみを返し、前置きやコードフェンスは付けないこと。形式: {"type":""}',
+  lot:  '電動アシスト自転車バッテリーの製造ロットラベルの画像です。ロット記号を読み取り、左から4桁の英数字だけを返してください（例: VB14、YVD2）。読み取れない場合は空文字にし、推測で埋めないこと。JSONのみを返し、前置きやコードフェンスは付けないこと。形式: {"lot":""}'
+};
+function read(file, kind){
+  busy(kind==="type" ? "型番を読み取っています" : "ロットを読み取っています");
+  const img = new Image();
+  img.onload = async () => {
+    try{
+      const s = Math.min(1, 1500/Math.max(img.width,img.height));
+      const cv = document.createElement("canvas");
+      cv.width = Math.round(img.width*s); cv.height = Math.round(img.height*s);
+      cv.getContext("2d").drawImage(img,0,0,cv.width,cv.height);
+      const data = cv.toDataURL("image/jpeg",0.85).split(",")[1];
+      const res = await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ model:"claude-sonnet-4-6", max_tokens:1000, messages:[{role:"user",content:[
+          {type:"image", source:{type:"base64", media_type:"image/jpeg", data}},
+          {type:"text", text:PROMPTS[kind]}]}]})
+      });
+      const d = await res.json();
+      const txt = d.content.filter(x=>x.type==="text").map(x=>x.text).join("").replace(/```json|```/g,"").trim();
+      const p = JSON.parse(txt);
+      if(kind==="type"){
+        cur.type = (p.type||"").toString().trim().toUpperCase();
+        cur.hit = findModel(cur.type);
+        typeScreen();
+      }else{
+        cur.lot = N(p.lot).slice(0,4);
+        lotScreen();
+      }
+    }catch(e){
+      if(kind==="type") homeScreen("読み取りに失敗しました。ラベル全体が明るく写るよう、もう一度撮影してください。");
+      else { cur.lot=""; lotScreen(); }
+    }
+  };
+  img.onerror = () => homeScreen("画像を開けませんでした。もう一度撮影してください。");
+  img.src = URL.createObjectURL(file);
+}
+
+/* ===== 起動 ===== */
+(async () => {
+  busy("マスタを読み込んでいます");
+  M = await loadMaster();
+  homeScreen();
+})();
+</script>
