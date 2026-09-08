@@ -133,7 +133,7 @@ function parseCSV(text){
 /* ===== 状態 ===== */
 const app = document.getElementById("app");
 let M = null, source = "";
-let cur = { type:"", lot:"", hit:null };
+let cur = { type:"", pn:"", lot:"", hit:null };
 
 /* ===== マスタ ===== */
 function build(cases, models, lots){
@@ -179,13 +179,29 @@ async function loadMaster(){
 }
 
 /* ===== 判定 ===== */
-function findModel(typeStr){
-  const t = N(typeStr);
-  if(!t) return null;
+function typeCandidates(raw, pn){
+  const set = new Set();
+  const push = s => { const n = N(s); if(n) set.add(n); };
+  [raw, pn].forEach(src=>{
+    if(!src) return;
+    const s = src.toString().toUpperCase();
+    push(s);
+    (s.match(/[（(][^）)]*[）)]/g)||[]).forEach(g=>push(g));
+    const re = /([A-Z][A-Z0-9]{2})[-\s]?([0-9]{4,6})[-\s]?([0-9]{2})/g;
+    let m; while((m = re.exec(s))) push(m[1]+m[3]);
+  });
+  return Array.from(set);
+}
+function findModel(raw, pn){
+  const cands = typeCandidates(raw, pn);
+  if(!cands.length) return null;
   let best = null;
-  for(const c of M.cases) for(const m of c.models)
-    if(m.key && t.indexOf(m.key) !== -1)
+  for(const c of M.cases) for(const m of c.models){
+    if(!m.key) continue;
+    for(const t of cands) if(t.indexOf(m.key) !== -1){
       if(!best || m.key.length > best.m.key.length) best = { c, m };
+    }
+  }
   return best;
 }
 function judgeLot(hit, lotStr){
@@ -233,6 +249,7 @@ function typeScreen(){
     <div class="card"><h2>読み取った内容　違っていればタップして直す</h2>
       <button class="field" data-k="type"><span class="k">型番</span>
         <span class="v ${cur.type?"":"empty"}">${esc(cur.type)||"読み取れませんでした"}</span></button>
+      ${cur.pn?`<p class="meta">PN: ${esc(cur.pn)}</p>`:""}
       ${hit?`<p class="meta">${esc(hit.m.label)}<br>${esc(hit.c.name)}</p>`:""}
     </div>
     ${hit?contact(hit.c):""}
@@ -242,7 +259,7 @@ function typeScreen(){
       <button class="btn" id="again" style="margin-top:12px">最初に戻る</button>`
      :`<button class="btn solid" id="again">次のバッテリーを撮る</button>`}`);
 
-  wireFields(()=>{ cur.hit = findModel(cur.type); typeScreen(); });
+  wireFields(()=>{ cur.hit = findModel(cur.type, cur.pn); typeScreen(); });
   if(next) bindShot("go2","f2","lot");
   document.getElementById("again").onclick = reset;
   if(!next) save(h);
@@ -278,7 +295,7 @@ function wireFields(after){
     after();
   });
 }
-function reset(){ cur = {type:"",lot:"",hit:null}; homeScreen(); }
+function reset(){ cur = {type:"",pn:"",lot:"",hit:null}; homeScreen(); }
 
 /* ===== 履歴（この端末にのみ保存） ===== */
 async function save(result){
@@ -308,7 +325,11 @@ async function historyScreen(){
 
 /* ===== 撮影 → 読み取り ===== */
 const PROMPTS = {
-  type: '電動アシスト自転車バッテリーのラベル画像です。ラベルに印字されている「バッテリー型番」を読み取ってください。型番はカッコ内に印字されている場合があり、X0T-00、X0U-20、X83のような英数字とハイフンの組み合わせです。品番・規格・容量（Ah）・電圧・製造番号と混同しないこと。読み取れない場合は空文字にし、推測で埋めないこと。JSONのみを返し、前置きやコードフェンスは付けないこと。形式: {"type":""}',
+  type: '電動アシスト自転車バッテリーのラベル画像です。次の2項目を読み取ってください。\n'
+      + 'type: リコール判定に使う型番。ラベル下部の「PN:」の行にある丸カッコ内の型番です。例: 「PN: X0T-82110-20(X0T-20)」なら X0T-20 を返します。\n'
+      + 'pn: 「PN:」の行の文字列全体。例: X0T-82110-20(X0T-20)\n'
+      + '重要な注意: 「Model name:」の値（X1N など）は型番ではありません。絶対にtypeに入れないこと。定格電圧(V)・容量(Ah)・電力量(Wh)・Li-ionの数字・組立国も型番ではありません。\n'
+      + '読み取れない項目は空文字にし、推測で埋めないこと。JSONのみを返し、前置きやコードフェンスは付けないこと。形式: {"type":"","pn":""}',
   lot:  '電動アシスト自転車バッテリーの製造ロットラベルの画像です。ロット記号を読み取り、左から4桁の英数字だけを返してください（例: VB14、YVD2）。読み取れない場合は空文字にし、推測で埋めないこと。JSONのみを返し、前置きやコードフェンスは付けないこと。形式: {"lot":""}'
 };
 function read(file, kind){
@@ -331,8 +352,13 @@ function read(file, kind){
       const txt = d.content.filter(x=>x.type==="text").map(x=>x.text).join("").replace(/```json|```/g,"").trim();
       const p = JSON.parse(txt);
       if(kind==="type"){
+        cur.pn = (p.pn||"").toString().trim().toUpperCase();
         cur.type = (p.type||"").toString().trim().toUpperCase();
-        cur.hit = findModel(cur.type);
+        if(!cur.type && cur.pn){
+          const d = cur.pn.match(/([A-Z][A-Z0-9]{2})[-\s]?[0-9]{4,6}[-\s]?([0-9]{2})/);
+          if(d) cur.type = d[1] + "-" + d[2];
+        }
+        cur.hit = findModel(cur.type, cur.pn);
         typeScreen();
       }else{
         cur.lot = N(p.lot).slice(0,4);
